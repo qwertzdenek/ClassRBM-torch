@@ -141,8 +141,8 @@ function free_energy_train()
 	return err/validation_size
 end
 
--- 1) Run RBM pretrain
-function pretrain_feval(t)
+-- 1) Run RBM train
+function train_feval(t)
 	local index = torch.random(trainset.size)
 	local v = trainset[index].x:view(opt.n_visible)
 	local y = trainset[index].y
@@ -166,14 +166,14 @@ function pretrain_feval(t)
 end
 
 function store_rbm(params, name)
-	local target_rbm = ClassRBM(opt.n_visible, opt.n_hidden, opt.n_class, opt.batch_size)
+	local target_rbm = ClassRBM(opt.n_visible, opt.n_hidden, opt.n_class)
 	local p, _ = target_rbm:getParameters()
 	p:copy(params)
 	torch.save(name, target_rbm)
 end
 
 -- Create RBM
-rbm = ClassRBM(opt.n_visible, opt.n_hidden, opt.n_class, opt.batch_size)
+rbm = ClassRBM(opt.n_visible, opt.n_hidden, opt.n_class)
 
 -- Training parameters
 weightVelocity = rbm.gradWeight:clone()
@@ -225,7 +225,7 @@ err = 0; iter = 0; patience = 15; best_val_err = 1/0
 best_rbm = torch.Tensor()
 best_rbm:resizeAs(x):copy(x)
 for epoch=1, opt.max_epochs do
-	print('pretrain epoch '..epoch)
+	print('train epoch '..epoch)
 
 	velocity:zero()
 
@@ -241,7 +241,7 @@ for epoch=1, opt.max_epochs do
 		iter = iter + 1
 		--xlua.progress(t, training_time)
 
-		curr_err = pretrain_feval(t)
+		curr_err = train_feval(t)
 		epoch_err = epoch_err + curr_err
 		err = err + curr_err
 
@@ -284,8 +284,8 @@ for epoch=1, opt.max_epochs do
 	end
 
 	if epoch == math.floor(opt.max_epochs*0.5) then
-		store_rbm(best_rbm, 'models/'..opt.prefix..'pretrained_rbm_'..epoch..'.dat')
+		store_rbm(best_rbm, 'models/'..opt.prefix..'trained_rbm_'..epoch..'.dat')
 	end
 end
 
-store_rbm(best_rbm, 'models/'..opt.prefix..'pretrained_rbm_final.dat')
+store_rbm(best_rbm, 'models/'..opt.prefix..'trained_rbm_final.dat')

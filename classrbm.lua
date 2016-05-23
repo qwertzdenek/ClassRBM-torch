@@ -8,7 +8,7 @@ require 'nn'
 
 local ClassRBM, parent = torch.class('ClassRBM', 'nn.Module')
 
-function ClassRBM:__init(n_visible, n_hidden, n_class, batch_size)
+function ClassRBM:__init(n_visible, n_hidden, n_class)
     parent.__init(self)
     self.n_visible = n_visible
     self.n_hidden = n_hidden
