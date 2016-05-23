@@ -1,4 +1,4 @@
--- common.lua
+-- train.lua
 -- Zdeněk Janeček, 2016 (ycdmdj@gmail.com)
 --
 -- University of West Bohemia
@@ -35,7 +35,7 @@ cmd:option('-max_epochs', 60, 'number of full passes through the training data w
 --cmd:option('-sparsity_cost',0.0002,'sparsity cost')
 
 cmd:option('-batch_size',12,'number of sequences to train on in parallel')
-cmd:option('-stat_interval',1024,'statistics interval')
+cmd:option('-stat_interval',4092,'statistics interval')
 cmd:option('-cuda', false,'use CUDA backend')
 cmd:option('-opencl', false,'use OpenCL backend')
 
@@ -183,22 +183,26 @@ uweightVelocity = rbm.gradUWeight:clone()
 dbiasVelocity = rbm.gradDbias:clone()
 
 qval = torch.zeros(opt.n_hidden, 1)
-velocity = nn.Module.flatten{weightVelocity, vbiasVelocity, hbiasVelocity, uweightVelocity, dbiasVelocity}
 
 if opt.cuda then
 	rbm = rbm:cuda()
 	qval = qval:cuda()
-	local cuda_velocity = torch.CudaDoubleTensor(velocity:storage():size())
-	cuda_velocity:copy(velocity:storage())
-	velocity = cuda_velocity
+	weightVelocity = weightVelocity:cuda()
+	vbiasVelocity = vbiasVelocity:cuda()
+	hbiasVelocity = hbiasVelocity:cuda()
+	uweightVelocity = uweightVelocity:cuda()
+	dbiasVelocity = dbiasVelocity:cuda()
 elseif opt.opencl then
 	rbm = rbm:cl()
 	qval = qval:cl()
-	local cl_velocity = torch.ClTensor(velocity:storage():size())
-	cl_velocity:copy(velocity:storage())
-	velocity = cl_velocity
+	weightVelocity = weightVelocity:cl()
+	vbiasVelocity = vbiasVelocity:cl()
+	hbiasVelocity = hbiasVelocity:cl()
+	uweightVelocity = uweightVelocity:cl()
+	dbiasVelocity = dbiasVelocity:cl()
 end
 
+velocity = nn.Module.flatten{weightVelocity, vbiasVelocity, hbiasVelocity, uweightVelocity, dbiasVelocity}
 x,dl_dx = rbm:getParameters()
 
 histogramValues = {
