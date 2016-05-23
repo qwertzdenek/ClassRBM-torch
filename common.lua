@@ -10,12 +10,16 @@ function momentum_update(derivate, velocity, target, config)
 	target:add(velocity)
 end
 
-function sample_ber(x)
-	local r = torch.rand(x:size())
+function sample_ber(x, r)
+	-- random generator memory
+	r:resizeAs(x)
+
 	if torch.type(x) == 'torch.ClTensor' then
-		r = r:cl()
+		r:copy(torch.Tensor(r:size()):uniform())
 	elseif torch.type(x) == 'torch.CudaTensor' then
-		r = r:cuda()
+		r:uniform()
+	else
+		r:uniform()
 	end
 
 	x:csub(r):sign():clamp(0, 1)

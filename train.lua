@@ -1,3 +1,8 @@
+-- common.lua
+-- Zdeněk Janeček, 2016 (ycdmdj@gmail.com)
+--
+-- University of West Bohemia
+
 local mnist = require 'mnist'
 require 'classrbm'
 require 'plot_stats'
@@ -20,18 +25,19 @@ cmd:option('-n_class', 10, 'Number of target classes')
 
 cmd:text('Optimalization parameters')
 -- optimization
-cmd:option('-learning_rate',0.012,'learning rate')
+cmd:option('-learning_rate',0.005,'learning rate')
 cmd:option('-momentum',0.5,'momentum')
 cmd:option('-L2',0.000022,'L2 decay')
-cmd:option('-max_epochs', 4, 'number of full passes through the training data while RBM train')
+cmd:option('-max_epochs', 60, 'number of full passes through the training data while RBM train')
 
-cmd:option('-sparsity_decay_rate',0.9,'decay rate for sparsity')
-cmd:option('-sparsity_target',0.08,'sparsity target')
-cmd:option('-sparsity_cost',0.0002,'sparsity cost')
+--cmd:option('-sparsity_decay_rate',0.9,'decay rate for sparsity')
+--cmd:option('-sparsity_target',0.08,'sparsity target')
+--cmd:option('-sparsity_cost',0.0002,'sparsity cost')
 
 cmd:option('-batch_size',12,'number of sequences to train on in parallel')
 cmd:option('-stat_interval',1024,'statistics interval')
 cmd:option('-cuda', false,'use CUDA backend')
+cmd:option('-opencl', false,'use OpenCL backend')
 
 opt = cmd:parse(arg)
 torch.seed()
@@ -39,8 +45,6 @@ torch.seed()
 local trainset = mnist.traindataset()
 local testset = mnist.testdataset()
 
---local y = torch.Tensor(opt.batch_size, opt.n_class)
---local v = torch.Tensor(opt.batch_size, opt.n_visible)
 local oneY = torch.Tensor(opt.n_class)
 
 testset['data'] = testset['data']:double():clamp(0,1)
@@ -51,16 +55,26 @@ trainset['label'] = trainset['label']:double()
 
 if opt.cuda then
 	require 'cutorch'
+	require 'cunn'
 
 	testset['data'] = testset['data']:cuda()
 	testset['label'] = testset['label']:cuda()
-	
+
 	trainset['data'] = trainset['data']:cuda()
 	trainset['label'] = trainset['label']:cuda()
-	
-	y = y:cuda()
-	v = v:cuda()
+
 	oneY = oneY:cuda()
+elseif opt.opencl then
+	require 'cltorch'
+	require 'clnn'
+
+	testset['data'] = testset['data']:cl()
+	testset['label'] = testset['label']:cl()
+
+	trainset['data'] = trainset['data']:cl()
+	trainset['label'] = trainset['label']:cl()
+
+	oneY = oneY:cl()
 end
 
 local validation_size = 256
@@ -129,15 +143,6 @@ end
 
 -- 1) Run RBM pretrain
 function pretrain_feval(t)
-	--~ for i=1, opt.batch_size do
-		--~ local visible = trainset[t*opt.batch_size + i].x
-		--~ local class = trainset[t*opt.batch_size + i].y
-		--~ v[i]:copy(visible)
-		
-		--~ y:zero()
-		--~ y[i][class+1] = 1
-	--~ end
-	
 	local index = torch.random(trainset.size)
 	local v = trainset[index].x:view(opt.n_visible)
 	local y = trainset[index].y
@@ -145,8 +150,7 @@ function pretrain_feval(t)
 	oneY[y+1] = 1
 
 	local _, yt = rbm:forward{v, oneY}
-	
-	--~ local err = torch.ne(yt, y):sum(2):gt(0):sum() / opt.batch_size
+
 	local err = torch.ne(oneY, yt):sum() == 0 and 0 or 1
 	rbm:backward({v, oneY}, nil)
 
@@ -161,6 +165,13 @@ function pretrain_feval(t)
 	return err
 end
 
+function store_rbm(params, name)
+	local target_rbm = ClassRBM(opt.n_visible, opt.n_hidden, opt.n_class, opt.batch_size)
+	local p, _ = target_rbm:getParameters()
+	p:copy(params)
+	torch.save(name, target_rbm)
+end
+
 -- Create RBM
 rbm = ClassRBM(opt.n_visible, opt.n_hidden, opt.n_class, opt.batch_size)
 
@@ -172,19 +183,22 @@ uweightVelocity = rbm.gradUWeight:clone()
 dbiasVelocity = rbm.gradDbias:clone()
 
 qval = torch.zeros(opt.n_hidden, 1)
+velocity = nn.Module.flatten{weightVelocity, vbiasVelocity, hbiasVelocity, uweightVelocity, dbiasVelocity}
 
 if opt.cuda then
-	criterion = criterion:cuda()
 	rbm = rbm:cuda()
-	weightVelocity = weightVelocity:cuda()
-	vbiasVelocity = vbiasVelocity:cuda()
-	hbiasVelocity = hbiasVelocity:cuda()
-	uweightVelocity = uweightVelocity:cuda()
-	dbiasVelocity = dbiasVelocity:cuda()
 	qval = qval:cuda()
+	local cuda_velocity = torch.CudaDoubleTensor(velocity:storage():size())
+	cuda_velocity:copy(velocity:storage())
+	velocity = cuda_velocity
+elseif opt.opencl then
+	rbm = rbm:cl()
+	qval = qval:cl()
+	local cl_velocity = torch.ClTensor(velocity:storage():size())
+	cl_velocity:copy(velocity:storage())
+	velocity = cl_velocity
 end
 
-velocity = nn.Module.flatten{weightVelocity, vbiasVelocity, hbiasVelocity, uweightVelocity, dbiasVelocity}
 x,dl_dx = rbm:getParameters()
 
 histogramValues = {
@@ -203,35 +217,36 @@ histogramValues = {
 
 training_time = trainset.size/2
 
-err = 0; iter = 0
+err = 0; iter = 0; patience = 15; best_val_err = 1/0
+best_rbm = torch.Tensor()
+best_rbm:resizeAs(x):copy(x)
 for epoch=1, opt.max_epochs do
 	print('pretrain epoch '..epoch)
 
 	velocity:zero()
 
 	if epoch == math.floor(opt.max_epochs*0.5) then
-		torch.save('models/'..opt.prefix..'pretrained_rbm_'..epoch..'.dat', rbm)
 		config.momentum = 0.8
-	end
-	if epoch == math.floor(opt.max_epochs*0.72) then
+	elseif epoch == math.floor(opt.max_epochs*0.72) then
 		config.momentum = 0.9
 	end
-	if epoch == opt.max_epochs then
-		torch.save('models/'..opt.prefix..'pretrained_rbm_'..epoch..'.dat', rbm)
-	end
+
+	epoch_err = 0
 
 	for t = 0, training_time-1 do
 		iter = iter + 1
-		xlua.progress(t, training_time)
+		--xlua.progress(t, training_time)
 
-		err = err + pretrain_feval(t)
+		curr_err = pretrain_feval(t)
+		epoch_err = epoch_err + curr_err
+		err = err + curr_err
 
 		if iter >= opt.stat_interval then
 			local test = reconstruction_test(rbm)
 			local train = reconstruction_train(rbm)
 			local energy_test = free_energy_test(rbm)
 			local energy_train = free_energy_train(rbm)
-			
+
 			print(string.format('%s t=%d loss=%.4f test=%.4f%% train=%.4f%% ftest=%.4f ftrain=%.4f', os.date("%d/%m %H:%M:%S"), t, err/opt.stat_interval, test, train, energy_test, energy_train))
 
 			-- reset counters
@@ -239,7 +254,7 @@ for epoch=1, opt.max_epochs do
 
 			if opt.v then
 				draw_hist(rbm.mu1, 'mean_hidden-'..epoch..'-'..t, 'pravděpodobnost')
-				
+
 				draw_stats(histogramValues, 'hist_'..epoch..'-'..t)
 
 				local wm = image.toDisplayTensor{
@@ -249,4 +264,24 @@ for epoch=1, opt.max_epochs do
 			end
 		end
 	end
+
+	if epoch_err < best_val_err then
+		best_val_err = epoch_err
+		best_rbm:copy(x)
+
+		patience = 15
+	else
+		patience = patience - 1
+		print('-> patience=', patience)
+
+		if patience < 0  then
+			break
+		end
+	end
+
+	if epoch == math.floor(opt.max_epochs*0.5) then
+		store_rbm(best_rbm, 'models/'..opt.prefix..'pretrained_rbm_'..epoch..'.dat')
+	end
 end
+
+store_rbm(best_rbm, 'models/'..opt.prefix..'pretrained_rbm_final.dat')

@@ -1,3 +1,8 @@
+-- common.lua
+-- Zdeněk Janeček, 2016 (ycdmdj@gmail.com)
+--
+-- University of West Bohemia
+
 require 'common'
 require 'nn'
 
@@ -11,6 +16,7 @@ function ClassRBM:__init(n_visible, n_hidden, n_class, batch_size)
 
     self.input = torch.Tensor()
     self.y = torch.Tensor()
+    self.r = torch.Tensor()
     
     self.vt = torch.Tensor()
     self.yt = torch.Tensor()
@@ -111,9 +117,9 @@ function ClassRBM:updateOutput(input)
     local yt = input[2]
     
     for t=1, self.cdSteps do
-        local ht = sample_ber(self:updateOutputExpected(vt, yt))
+        local ht = sample_ber(self:updateOutputExpected(vt, yt), self.r)
         vt, yt = self:updateInput(ht)
-        sample_ber(vt)
+        sample_ber(vt, self.r)
         sample_max(yt)
     end
     
